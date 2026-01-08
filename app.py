@@ -161,7 +161,7 @@ if prompt := st.chat_input("请输入您的问题..."):
                     db_p = f"./{DB_PREFIX}{cat}"
                     if os.path.exists(db_p):
                         vdb = Chroma(persist_directory=db_p, embedding_function=get_embedding_model())
-                        docs = vdb.as_retriever(search_kwargs={"k": 3}).get_relevant_documents(prompt)
+                        docs = vdb.as_retriever(search_kwargs={"k": 3}).invoke(prompt)
                         combined_context += f"\n\n--- 来自【{cat}】的参考资料 ---\n"
                         combined_context += "\n".join([d.page_content for d in docs])
                 
@@ -178,3 +178,4 @@ if prompt := st.chat_input("请输入您的问题..."):
                 st.session_state.all_chats[st.session_state.current_chat_id]["messages"].append({"role": "assistant", "content": response})
                 save_all_chats(st.session_state.all_chats)
             except Exception as e: st.error(f"出错：{e}")
+
