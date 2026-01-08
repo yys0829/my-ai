@@ -5,4 +5,5 @@ langchain-community
 chromadb
 pypdf
 docx2txt
+python-docx
 sentence-transformers
