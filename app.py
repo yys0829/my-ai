@@ -17,6 +17,12 @@ try:
 except Exception as e:
     st.error(f"组件缺失：{e}"); st.stop()
 
+# ==========================================================
+# 新增：从 Secrets 获取信息（如果云端没配置，则为空字符串）
+# ==========================================================
+secret_pwd = st.secrets.get("PASSWORD", "")
+secret_key = st.secrets.get("DEEPSEEK_API_KEY", "")
+
 # --- 2. 基础配置 ---
 DB_PREFIX = "db_"
 HISTORY_FILE = "all_chats_v3.json"
@@ -36,38 +42,42 @@ def save_all_chats(chats):
 
 # --- 3. 页面设置 ---
 st.set_page_config(page_title="DeepSeek 集团全能智库", layout="wide")
-# --- 权限校验功能 ---
+
+# --- 权限校验功能 (已集成 Secrets) ---
 def check_password():
     """如果返回 True，则显示主界面；如果返回 False，则停留在登录页"""
+    
+    # 如果已经在 Secrets 里设置了密码，且 session 还没记录成功，直接静默授权
+    if secret_pwd and "password_correct" not in st.session_state:
+        st.session_state["password_correct"] = True
+        return True
+
     def password_entered():
-        # 这里设置你的访问密码
-        if st.session_state["password"] == "6688": 
+        # 兼容 Secrets 密码或手动设置的 6688
+        valid_password = secret_pwd if secret_pwd else "6688"
+        if st.session_state["password"] == valid_password: 
             st.session_state["password_correct"] = True
-            del st.session_state["password"]  # 登录成功后删除临时存储的密码
+            del st.session_state["password"] 
         else:
             st.session_state["password_correct"] = False
 
     if "password_correct" not in st.session_state:
-        # 还没登录过，显示输入框
         st.title("🔐 私有智库访问授权")
         st.text_input("请输入访问授权码", type="password", on_change=password_entered, key="password")
         st.info("提示：此为个人私有办公智库，仅限授权使用。")
         return False
     elif not st.session_state["password_correct"]:
-        # 密码输错了
         st.title("🔐 私有智库访问授权")
         st.text_input("授权码错误，请重新输入", type="password", on_change=password_entered, key="password")
         st.error("❌ 授权失败")
         return False
     else:
-        # 密码正确
         return True
 
 # --- 逻辑控制 ---
 if not check_password():
-    st.stop()  # 如果没登录成功，直接切断后续所有代码的执行
+    st.stop() 
 
-# --- 后面就是你原来的代码了 (st.sidebar 等等) ---
 if "all_chats" not in st.session_state: st.session_state.all_chats = load_all_chats()
 if "current_chat_id" not in st.session_state: st.session_state.current_chat_id = None
 
@@ -75,9 +85,19 @@ if "current_chat_id" not in st.session_state: st.session_state.current_chat_id =
 with st.sidebar:
     st.title("📂 智库管理中心")
     
+    # --- 改进：API Key 自动加载逻辑 ---
+    st.subheader("🔑 接口配置")
+    if secret_key:
+        api_key = secret_key
+        st.success("✅ DeepSeek Key 已自动加载")
+    else:
+        api_key = st.text_input("DeepSeek API Key", type="password", help="请填入 sk- 开头的密钥")
+    
+    st.divider()
+    
     # A. 跨库检索开关
     st.subheader("🛠️ 检索模式")
-    multi_db_mode = st.toggle("🌐 开启全库联合检索", value=False, help="开启后将搜索所有分类库，适合做跨逻辑对比。")
+    multi_db_mode = st.toggle("🌐 开启全库联合检索", value=False)
     
     # B. 知识库维护
     with st.expander("✨ 知识库维护 (上传/新建)"):
@@ -109,7 +129,7 @@ with st.sidebar:
 
     st.divider()
     
-    # C. 检索范围（非联合模式下生效）
+    # C. 检索范围
     st.subheader("🔍 问答检索范围")
     all_cats = [d.replace(DB_PREFIX, "") for d in os.listdir(".") if os.path.isdir(d) and d.startswith(DB_PREFIX)]
     selected_cat = st.selectbox("当前提问基于：", all_cats if all_cats else ["默认"], disabled=multi_db_mode)
@@ -123,9 +143,6 @@ with st.sidebar:
         if st.button(f"💬 {cdata['title']}", key=cid, use_container_width=True):
             st.session_state.current_chat_id = cid; st.rerun()
 
-    st.divider()
-    api_key = st.text_input("DeepSeek API Key", type="password")
-
 # --- 5. 主界面与问答逻辑 ---
 st.markdown(f"### 🎯 模式：{'全库联合检索' if multi_db_mode else f'单库检索({selected_cat})'}")
 
@@ -136,38 +153,39 @@ else:
     st.info("请在下方输入问题。开启'全库联合检索'可同时对比多个分类文件。")
 
 if prompt := st.chat_input("请输入您的问题..."):
+    if not api_key: 
+        st.error("❌ 未检测到 API Key，请在左侧侧边栏配置。")
+        st.stop()
+        
     with st.chat_message("user"): st.markdown(prompt)
     if not st.session_state.current_chat_id:
         cid = str(uuid.uuid4()); st.session_state.current_chat_id = cid
         st.session_state.all_chats[cid] = {"title": prompt[:12], "messages": []}
 
-    if not api_key: st.error("请配置 API Key")
-    else:
-        with st.chat_message("assistant"):
-            with st.spinner("正在跨库检索资料..."):
-                try:
-                    # --- 核心逻辑：多库联合加载 ---
-                    combined_context = ""
-                    search_list = all_cats if multi_db_mode else [selected_cat]
-                    
-                    for cat in search_list:
-                        db_p = f"./{DB_PREFIX}{cat}"
-                        if os.path.exists(db_p):
-                            vdb = Chroma(persist_directory=db_p, embedding_function=get_embedding_model())
-                            docs = vdb.as_retriever(search_kwargs={"k": 3}).get_relevant_documents(prompt)
-                            combined_context += f"\n\n--- 来自【{cat}】的参考资料 ---\n"
-                            combined_context += "\n".join([d.page_content for d in docs])
-                    
-                    if not combined_context.strip():
-                        response = "未能在任何知识库中找到相关资料。"
-                    else:
-                        llm = ChatOpenAI(model='deepseek-chat', openai_api_key=api_key, openai_api_base="https://api.deepseek.com", temperature=0.1)
-                        prompt_tmpl = ChatPromptTemplate.from_template("你是一个企业助手。请根据以下资料回答。如果资料来自不同库，请对比分析。\n资料：{context}\n问题：{question}")
-                        chain = ({"context": lambda x: combined_context, "question": RunnablePassthrough()} | prompt_tmpl | llm | StrOutputParser())
-                        response = chain.invoke(prompt)
-                    
-                    st.markdown(response)
-                    st.session_state.all_chats[st.session_state.current_chat_id]["messages"].append({"role": "user", "content": prompt})
-                    st.session_state.all_chats[st.session_state.current_chat_id]["messages"].append({"role": "assistant", "content": response})
-                    save_all_chats(st.session_state.all_chats)
-                except Exception as e: st.error(f"出错：{e}")
+    with st.chat_message("assistant"):
+        with st.spinner("正在跨库检索资料..."):
+            try:
+                combined_context = ""
+                search_list = all_cats if multi_db_mode else [selected_cat]
+                
+                for cat in search_list:
+                    db_p = f"./{DB_PREFIX}{cat}"
+                    if os.path.exists(db_p):
+                        vdb = Chroma(persist_directory=db_p, embedding_function=get_embedding_model())
+                        docs = vdb.as_retriever(search_kwargs={"k": 3}).get_relevant_documents(prompt)
+                        combined_context += f"\n\n--- 来自【{cat}】的参考资料 ---\n"
+                        combined_context += "\n".join([d.page_content for d in docs])
+                
+                if not combined_context.strip():
+                    response = "未能在任何知识库中找到相关资料。"
+                else:
+                    llm = ChatOpenAI(model='deepseek-chat', openai_api_key=api_key, openai_api_base="https://api.deepseek.com", temperature=0.1)
+                    prompt_tmpl = ChatPromptTemplate.from_template("你是一个企业助手。请根据以下资料回答。如果资料来自不同库，请对比分析。\n资料：{context}\n问题：{question}")
+                    chain = ({"context": lambda x: combined_context, "question": RunnablePassthrough()} | prompt_tmpl | llm | StrOutputParser())
+                    response = chain.invoke(prompt)
+                
+                st.markdown(response)
+                st.session_state.all_chats[st.session_state.current_chat_id]["messages"].append({"role": "user", "content": prompt})
+                st.session_state.all_chats[st.session_state.current_chat_id]["messages"].append({"role": "assistant", "content": response})
+                save_all_chats(st.session_state.all_chats)
+            except Exception as e: st.error(f"出错：{e}")
