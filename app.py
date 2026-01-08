@@ -17,15 +17,11 @@ try:
 except Exception as e:
     st.error(f"组件缺失：{e}"); st.stop()
 
-# ==========================================================
-# 新增：从 Secrets 获取信息（如果云端没配置，则为空字符串）
-# ==========================================================
-secret_pwd = st.secrets.get("PASSWORD", "")
-secret_key = st.secrets.get("DEEPSEEK_API_KEY", "")
-
-# --- 2. 基础配置 ---
+# --- 2. 基础配置与 Secrets 加载 ---
 DB_PREFIX = "db_"
 HISTORY_FILE = "all_chats_v3.json"
+# 从 Streamlit 云端后台读取 Key
+secret_key = st.secrets.get("DEEPSEEK_API_KEY", "")
 
 @st.cache_resource
 def get_embedding_model():
@@ -43,19 +39,11 @@ def save_all_chats(chats):
 # --- 3. 页面设置 ---
 st.set_page_config(page_title="DeepSeek 集团全能智库", layout="wide")
 
-# --- 权限校验功能 (已集成 Secrets) ---
+# --- 4. 权限校验功能 (强制手动输入 6688，确保链接安全) ---
 def check_password():
-    """如果返回 True，则显示主界面；如果返回 False，则停留在登录页"""
-    
-    # 如果已经在 Secrets 里设置了密码，且 session 还没记录成功，直接静默授权
-    if secret_pwd and "password_correct" not in st.session_state:
-        st.session_state["password_correct"] = True
-        return True
-
     def password_entered():
-        # 兼容 Secrets 密码或手动设置的 6688
-        valid_password = secret_pwd if secret_pwd else "6688"
-        if st.session_state["password"] == valid_password: 
+        # 这里是你的访问密码，你可以随时修改这个字符串
+        if st.session_state["password"] == "6688": 
             st.session_state["password_correct"] = True
             del st.session_state["password"] 
         else:
@@ -74,25 +62,26 @@ def check_password():
     else:
         return True
 
-# --- 逻辑控制 ---
+# 执行密码校验
 if not check_password():
     st.stop() 
 
+# 登录成功后的初始化
 if "all_chats" not in st.session_state: st.session_state.all_chats = load_all_chats()
 if "current_chat_id" not in st.session_state: st.session_state.current_chat_id = None
 
-# --- 4. 侧边栏 ---
+# --- 5. 侧边栏 ---
 with st.sidebar:
     st.title("📂 智库管理中心")
     
-    # --- 改进：API Key 自动加载逻辑 ---
+    # 🔑 接口配置：优先使用 Secrets
     st.subheader("🔑 接口配置")
     if secret_key:
         api_key = secret_key
-        st.success("✅ DeepSeek Key 已自动加载")
+        st.success("✅ DeepSeek Key 已自动从 Secrets 加载")
     else:
-        api_key = st.text_input("DeepSeek API Key", type="password", help="请填入 sk- 开头的密钥")
-    
+        api_key = st.text_input("DeepSeek API Key", type="password")
+
     st.divider()
     
     # A. 跨库检索开关
@@ -143,18 +132,18 @@ with st.sidebar:
         if st.button(f"💬 {cdata['title']}", key=cid, use_container_width=True):
             st.session_state.current_chat_id = cid; st.rerun()
 
-# --- 5. 主界面与问答逻辑 ---
+# --- 6. 主界面与问答逻辑 ---
 st.markdown(f"### 🎯 模式：{'全库联合检索' if multi_db_mode else f'单库检索({selected_cat})'}")
 
 if st.session_state.current_chat_id:
     for m in st.session_state.all_chats[st.session_state.current_chat_id]["messages"]:
         with st.chat_message(m["role"]): st.markdown(m["content"])
 else:
-    st.info("请在下方输入问题。开启'全库联合检索'可同时对比多个分类文件。")
+    st.info("请在下方输入问题。通过侧边栏管理分类库，输入 6688 授权码即可访问。")
 
 if prompt := st.chat_input("请输入您的问题..."):
     if not api_key: 
-        st.error("❌ 未检测到 API Key，请在左侧侧边栏配置。")
+        st.error("❌ 未检测到 API Key，请在侧边栏配置或检查 Secrets。")
         st.stop()
         
     with st.chat_message("user"): st.markdown(prompt)
